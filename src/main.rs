@@ -321,16 +321,12 @@ fn tokenize(expr: &str) -> Result<Vec<Token>, CalcError> {
 // ── Percent preprocessing ─────────────────────────────────────────
 // Transforms Pct tokens into proper arithmetic before parsing.
 //
-// Rules (matching standard calculator behaviour):
-//   n %              → n / 100
-//   base + n %       → base + base * n / 100   e.g. 100+10% = 110
-//   base - n %       → base - base * n / 100   e.g. 50-15%  = 42.5
-//   base * n %       → base * (n / 100)         e.g. 200*10% = 20
-//   base / n %       → base / (n / 100)         (same as * 100/n)
-//
-// For + and - we inject "(left_side) *" after the operator so that
-// the percent applies to the accumulator (base), not just the operand.
-// For * and / the percent already scales correctly via /100.
+// Four rules (matching standard calculator behaviour):
+//   n %              → n / 100              e.g. 10%      = 0.1
+//   a % b            → a * b / 100          e.g. 123%10   = 12.3
+//   base + n %       → base + base*n/100    e.g. 100+10%  = 110
+//   base - n %       → base - base*n/100    e.g. 50-15%   = 42.5
+//   base * n %       → base * n/100         e.g. 200*10%  = 20
 fn preprocess_percent(tokens: Vec<Token>) -> Result<Vec<Token>, CalcError> {
     let mut t = tokens;
     let mut i = 0;
@@ -340,6 +336,22 @@ fn preprocess_percent(tokens: Vec<Token>) -> Result<Vec<Token>, CalcError> {
             if !prev_ok {
                 return Err(CalcError::UnexpectedToken("%".into()));
             }
+
+            // Rule: "a % b" → "a * b / 100"  (e.g. 123%10 = 12.3)
+            // If a number immediately follows %, treat as multiplicative percent
+            let next_is_number = matches!(t.get(i + 1), Some(Token::Number(_)));
+            if next_is_number {
+                // Tokens before: [..., a, Pct, b, ...]
+                // Replace Pct with Mul, insert Div 100 after b
+                t[i] = Token::Mul;
+                t.insert(i + 2, Token::Number(100.0));
+                t.insert(i + 2, Token::Div);
+                // i+2 = Div, i+3 = 100.0 — skip past them
+                i += 3;
+                continue;
+            }
+
+            // Standard rules: no number follows %
 
             // Find nearest top-level + or - to the left
             let mut op_pos: Option<usize> = None;
@@ -356,7 +368,6 @@ fn preprocess_percent(tokens: Vec<Token>) -> Result<Vec<Token>, CalcError> {
                         break;
                     }
                     Token::Mul | Token::Div if depth == 0 => {
-                        // * and % → just /100, no base injection needed
                         op_pos = Some(j as usize);
                         is_additive = false;
                         break;
@@ -369,18 +380,12 @@ fn preprocess_percent(tokens: Vec<Token>) -> Result<Vec<Token>, CalcError> {
             // Replace Pct with Mul Number(0.01)
             t[i] = Token::Number(0.01);
             t.insert(i, Token::Mul);
-            // Now: ... op [right_operand_tokens] Mul 0.01 ...
-            // i points to Mul, i+1 to 0.01
 
-            // For additive ops: inject "(base_tokens) *" after operator
-            // base = t[0..op_idx] — use direct index range, no clone of slice
+            // For additive ops: inject "(base) *" after operator
             if is_additive {
                 if let Some(op_idx) = op_pos {
-                    // Build inject vec: we must clone only the base range (unavoidable
-                    // since we insert into the same vec), but we avoid an extra intermediate
-                    // allocation by pre-computing the needed capacity.
-                    let base_len = op_idx; // number of tokens in base
-                    let mut inject = Vec::with_capacity(base_len + 3); // LParen + base + RParen + Mul
+                    let base_len = op_idx;
+                    let mut inject = Vec::with_capacity(base_len + 3);
                     inject.push(Token::LParen);
                     inject.extend_from_slice(&t[0..op_idx]);
                     inject.push(Token::RParen);
