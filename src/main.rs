@@ -903,6 +903,13 @@ impl AppState {
             BtnKind::Power     => self.input_str("^"),
             BtnKind::Sqrt      => self.apply_sqrt(),
             BtnKind::History   => self.show_history = !self.show_history,
+            BtnKind::Dot       => {
+                let last_op  = self.expression.rfind(|c: char| "+-*/%^".contains(c)).unwrap_or(0);
+                let last_dot = self.expression.rfind('.').unwrap_or(usize::MAX);
+                if last_dot == usize::MAX || last_dot < last_op {
+                    self.input_str(".");
+                }
+            }
         }
     }
 
@@ -1002,11 +1009,11 @@ unsafe fn draw_history_panel(hdc: HDC, state: &AppState, cw: i32, ch: i32) {
     MoveToEx(hdc, PAD, panel_y+28, ptr::null_mut()); LineTo(hdc, cw-PAD, panel_y+28);
     SelectObject(hdc, op); DeleteObject(pen as HGDIOBJ);
 
-    // Entries (newest first, from bottom)
+    // Entries — show the most recent, oldest at top
     let entry_h = 18i32;
     let entries_to_show = ((HISTORY_PANEL_H - 36) / entry_h) as usize;
-    let start = if state.history.len() > entries_to_show { state.history.len() - entries_to_show } else { 0 };
-    for (i, entry) in state.history[start..].iter().enumerate() {
+    let skip = if state.history.len() > entries_to_show { state.history.len() - entries_to_show } else { 0 };
+    for (i, entry) in state.history.iter().skip(skip).enumerate() {
         let y = panel_y + 32 + i as i32 * entry_h;
         let r = RECT { left: PAD, top: y, right: cw-PAD, bottom: y+entry_h };
         let color = if entry.contains("Ошибка") { 0x006666CCu32 } else { 0x00888888u32 };
