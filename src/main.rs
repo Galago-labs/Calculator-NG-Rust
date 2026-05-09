@@ -28,7 +28,6 @@ type HPEN      = *mut std::ffi::c_void;
 // Window styles
 const WS_POPUP:        DWORD = 0x80000000;
 const WS_CLIPCHILDREN: DWORD = 0x02000000;
-const WS_THICKFRAME:   DWORD = 0x00040000;
 
 // Messages
 const WM_DESTROY:     UINT = 0x0002;
@@ -1415,11 +1414,11 @@ fn main() {
 
         let sw = GetSystemMetrics(0); let sh = GetSystemMetrics(1);
 
-        // WS_POPUP = borderless window
+        // WS_POPUP = fully borderless window, no system chrome at all
         let hwnd = CreateWindowExW(
             0,
             class_name.as_ptr(), title.as_ptr(),
-            WS_POPUP | WS_CLIPCHILDREN | WS_THICKFRAME,
+            WS_POPUP | WS_CLIPCHILDREN,
             (sw - WIN_W) / 2, (sh - WIN_H) / 2, WIN_W, WIN_H,
             ptr::null_mut(), ptr::null_mut(), hinstance, ptr::null_mut(),
         );
