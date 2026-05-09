@@ -42,9 +42,20 @@ const WM_KEYDOWN:     UINT = 0x0100;
 const WM_CHAR:        UINT = 0x0102;
 const WM_CREATE:      UINT = 0x0001;
 const WM_NCHITTEST:   UINT = 0x0084;
+const WM_SYSCOMMAND:  UINT = 0x0112;
+const SC_MINIMIZE:  WPARAM = 0xF020;
+
+const WM_SETICON:     UINT   = 0x0080;
+const ICON_SMALL:     WPARAM = 0;
+const ICON_BIG:       WPARAM = 1;
+const IMAGE_ICON:     UINT   = 1;
+const LR_LOADFROMFILE:UINT   = 0x0010;
+const LR_DEFAULTSIZE: UINT   = 0x0040;
 
 const HTCAPTION:  LRESULT = 2;
 const HTCLIENT:   LRESULT = 1;
+
+const SW_MINIMIZE: i32 = 6;
 
 const IDC_ARROW:  usize = 32512;
 const PS_SOLID:   i32   = 0;
@@ -119,6 +130,9 @@ const SEPARATOR:     COLORREF = 0x003A3A3A;
 // titlebar close btn
 const CLOSE_HOVER:   COLORREF = 0x002222CC;
 const CLOSE_PRESS:   COLORREF = 0x001111AA;
+// titlebar minimize btn
+const MIN_HOVER:     COLORREF = 0x00404040;
+const MIN_PRESS:     COLORREF = 0x00303030;
 
 // ── Win32 structs ─────────────────────────────────────────────────
 #[repr(C)] struct WNDCLASSEXW {
@@ -178,6 +192,10 @@ const CLOSE_PRESS:   COLORREF = 0x001111AA;
     fn GetCursorPos(lp_point:*mut POINT)->BOOL;
     fn ScreenToClient(h_wnd:HWND,lp_point:*mut POINT)->BOOL;
     fn DestroyWindow(h_wnd:HWND)->BOOL;
+    fn LoadImageW(hinst:HINSTANCE,name:*const u16,typ:UINT,cx:i32,cy:i32,fuload:UINT)->*mut std::ffi::c_void;
+    fn SendMessageW(h_wnd:HWND,msg:UINT,w_param:WPARAM,l_param:LPARAM)->LRESULT;
+    fn DestroyIcon(h_icon:*mut std::ffi::c_void)->BOOL;
+    fn PostMessageW(h_wnd:HWND,msg:UINT,w_param:WPARAM,l_param:LPARAM)->BOOL;
 }
 #[link(name="gdi32")] extern "system" {
     fn CreateSolidBrush(color:COLORREF)->HBRUSH;
@@ -634,11 +652,10 @@ const HISTORY_PANEL_H: i32 = 220; // height of history overlay
 // Strings that are painted every frame are pre-converted once at startup.
 // This avoids Vec<u16> allocations on every WM_PAINT.
 struct WStrings {
-    title:   Vec<u16>,  // "Calculator-NG"
-    history: Vec<u16>,  // "История вычислений"
-    close:   Vec<u16>,  // "✕"
-    // Button labels pre-converted — avoids 21 Vec<u16> allocs per WM_PAINT.
-    // Index matches BUTTONS array index exactly.
+    title:      Vec<u16>,
+    history:    Vec<u16>,
+    close:      Vec<u16>,
+    minimize:   Vec<u16>,  // "—" minimize button label
     btn_labels: Vec<Vec<u16>>,
 }
 
@@ -648,6 +665,7 @@ impl WStrings {
             title:      to_wstring("Calculator-NG"),
             history:    to_wstring("История вычислений"),
             close:      to_wstring("✕"),
+            minimize:   to_wstring("—"),
             btn_labels: BUTTONS.iter().map(|b| to_wstring(b.label)).collect(),
         }
     }
@@ -701,6 +719,10 @@ struct AppState {
     pressed_btn:     i32,
     close_hovered:   bool,
     close_pressed:   bool,
+    min_hovered:     bool,
+    min_pressed:     bool,
+    min_hovered:     bool,
+    min_pressed:     bool,
     fonts:           Fonts,
     ws:              WStrings, // pre-built wstrings for static labels
     btn_rects:       Vec<RECT>, // pre-computed button geometry (fixed window size)
@@ -715,6 +737,8 @@ impl AppState {
             history: VecDeque::new(), show_history: false,
             hovered_btn: -1, pressed_btn: -1,
             close_hovered: false, close_pressed: false,
+            min_hovered: false, min_pressed: false,
+            min_hovered: false, min_pressed: false,
             fonts: Fonts::null(),
             ws: WStrings::new(),
             btn_rects: precompute_btn_rects(), // safe: uses only compile-time constants
@@ -964,6 +988,10 @@ fn close_btn_rect(cw: i32) -> RECT {
     RECT { left: cw-36, top: 6, right: cw-6, bottom: TITLE_H-6 }
 }
 
+fn min_btn_rect(cw: i32) -> RECT {
+    RECT { left: cw-72, top: 6, right: cw-42, bottom: TITLE_H-6 }
+}
+
 fn in_rect(mx: i32, my: i32, r: &RECT) -> bool {
     mx >= r.left && mx < r.right && my >= r.top && my < r.bottom
 }
@@ -1044,8 +1072,16 @@ unsafe fn paint(hwnd: HWND, state: &AppState) {
     let tb_r = RECT { left:0, top:0, right:cw, bottom:TITLE_H };
     let tb_br = CreateSolidBrush(0x00181818u32); FillRect(mem_dc, &tb_r, tb_br); DeleteObject(tb_br as HGDIOBJ);
     // Title text (cached wstring — no allocation)
-    let txt_r = RECT { left:PAD, top:0, right:cw-50, bottom:TITLE_H };
+    let txt_r = RECT { left:PAD+20, top:0, right:cw-80, bottom:TITLE_H };
     draw_text_w(mem_dc, &state.ws.title, txt_r, state.fonts.small, 0x00666666, DT_CENTER|DT_SINGLELINE|DT_VCENTER);
+    // Minimize button
+    {
+        let r = min_btn_rect(cw);
+        let fill = if state.min_pressed { CLOSE_PRESS } else if state.min_hovered { CLOSE_HOVER } else { 0x00181818u32 };
+        draw_rrect(mem_dc, &r, 5, fill);
+        draw_text_w(mem_dc, &state.ws.minimize, r, state.fonts.small, 0x00888888, DT_CENTER|DT_SINGLELINE|DT_VCENTER);
+    }
+    // Close button
     {
         let r = close_btn_rect(cw);
         let fill = if state.close_pressed { CLOSE_PRESS } else if state.close_hovered { CLOSE_HOVER } else { 0x00181818u32 };
@@ -1192,7 +1228,10 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wp: WPARAM, lp: LPARAM
             ScreenToClient(hwnd, &mut pt);
             if pt.y >= 0 && pt.y < TITLE_H {
                 let close_r = close_btn_rect(WIN_W);
-                if !in_rect(pt.x, pt.y, &close_r) { return HTCAPTION; }
+                let min_r   = min_btn_rect(WIN_W);
+                if !in_rect(pt.x, pt.y, &close_r) && !in_rect(pt.x, pt.y, &min_r) {
+                    return HTCAPTION;
+                }
             }
             HTCLIENT
         }
@@ -1215,6 +1254,11 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wp: WPARAM, lp: LPARAM
             let ch = in_rect(mx, my, &close_r);
             if ch != s.close_hovered { s.close_hovered = ch; InvalidateRect(hwnd, ptr::null(), 0); }
 
+            // Minimize button hover
+            let min_r = min_btn_rect(WIN_W);
+            let mh = in_rect(mx, my, &min_r);
+            if mh != s.min_hovered { s.min_hovered = mh; InvalidateRect(hwnd, ptr::null(), 0); }
+
             let idx = hit_test_cached(mx, my, &s.btn_rects);
             if s.hovered_btn != idx {
                 s.hovered_btn = idx; InvalidateRect(hwnd, ptr::null(), 0);
@@ -1231,6 +1275,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wp: WPARAM, lp: LPARAM
                 let s = &mut *sp;
                 s.hovered_btn = -1; s.pressed_btn = -1;
                 s.close_hovered = false; s.close_pressed = false;
+                s.min_hovered = false; s.min_pressed = false;
                 InvalidateRect(hwnd, ptr::null(), 0);
             }
             0
@@ -1244,6 +1289,10 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wp: WPARAM, lp: LPARAM
             // Close button?
             let close_r = close_btn_rect(WIN_W);
             if in_rect(mx, my, &close_r) { s.close_pressed = true; InvalidateRect(hwnd, ptr::null(), 0); return 0; }
+
+            // Minimize button?
+            let min_r = min_btn_rect(WIN_W);
+            if in_rect(mx, my, &min_r) { s.min_pressed = true; InvalidateRect(hwnd, ptr::null(), 0); return 0; }
 
             let idx = hit_test_cached(mx, my, &s.btn_rects);
             if idx >= 0 { s.pressed_btn = idx; InvalidateRect(hwnd, ptr::null(), 0); }
@@ -1260,6 +1309,14 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wp: WPARAM, lp: LPARAM
                 s.close_pressed = false;
                 let close_r = close_btn_rect(WIN_W);
                 if in_rect(mx, my, &close_r) { DestroyWindow(hwnd); return 0; }
+                InvalidateRect(hwnd, ptr::null(), 0); return 0;
+            }
+
+            // Minimize button?
+            if s.min_pressed {
+                s.min_pressed = false;
+                let min_r = min_btn_rect(WIN_W);
+                if in_rect(mx, my, &min_r) { ShowWindow(hwnd, SW_MINIMIZE); return 0; }
                 InvalidateRect(hwnd, ptr::null(), 0); return 0;
             }
 
@@ -1372,6 +1429,20 @@ fn main() {
 
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, sp as isize);
         (*sp).fonts = Fonts::load(); // load fonts after window exists (needs HWND)
+
+        // Load application icon from file and set on window
+        // This makes it appear in Alt+Tab, taskbar preview, and title bar
+        let icon_path = to_wstring("calculator.ico");
+        let hicon = LoadImageW(
+            ptr::null_mut(), icon_path.as_ptr(),
+            IMAGE_ICON, 0, 0,
+            LR_LOADFROMFILE | LR_DEFAULTSIZE,
+        );
+        if !hicon.is_null() {
+            SendMessageW(hwnd, WM_SETICON, ICON_BIG,   hicon as LPARAM);
+            SendMessageW(hwnd, WM_SETICON, ICON_SMALL, hicon as LPARAM);
+            // Note: icon is owned by the window; DestroyIcon not needed until app exit
+        }
 
         ShowWindow(hwnd, SW_SHOW);
         UpdateWindow(hwnd);
