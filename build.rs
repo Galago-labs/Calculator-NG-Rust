@@ -7,9 +7,12 @@ fn main() {
         res.set("LegalCopyright", "© 2026 Galago-labs");
         res.set_version_info(winresource::VersionInfo::PRODUCTVERSION, 0x0001_0000_0000_0000);
         res.set_version_info(winresource::VersionInfo::FILEVERSION,    0x0001_0000_0000_0000);
+        // Application icon — shows in taskbar, alt-tab, and file properties
+        res.set_icon("calculator.ico");
         // Hide console window
         println!("cargo:rustc-link-arg=/SUBSYSTEM:WINDOWS");
         println!("cargo:rustc-link-arg=/ENTRY:mainCRTStartup");
         res.compile().expect("Failed to compile Windows resources");
     }
 }
+
