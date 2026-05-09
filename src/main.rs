@@ -335,6 +335,37 @@ fn tokenize(expr: &str) -> Result<Vec<Token>, CalcError> {
     Ok(tokens)
 }
 
+// ── Implicit multiplication ───────────────────────────────────────
+// Inserts Mul tokens where multiplication is implied by juxtaposition:
+//   2(6)    → 2 * (6)       Number LParen
+//   (2)(3)  → (2) * (3)     RParen LParen
+//   (4)5    → (4) * 5       RParen Number  (less common but consistent)
+//   √(4)(2) → √(4) * (2)    RParen LParen (already handled)
+//   2√(9)   → 2 * √(9)      Number Sqrt
+fn implicit_mul(tokens: Vec<Token>) -> Vec<Token> {
+    let mut out = Vec::with_capacity(tokens.len() + 4);
+    for (i, tok) in tokens.iter().enumerate() {
+        if i > 0 {
+            let prev = &tokens[i - 1];
+            let needs_mul = matches!(
+                (prev, tok),
+                // Number followed by opening context
+                (Token::Number(_), Token::LParen) |
+                (Token::Number(_), Token::Sqrt)   |
+                // Closing paren followed by opening context
+                (Token::RParen,    Token::LParen) |
+                (Token::RParen,    Token::Number(_)) |
+                (Token::RParen,    Token::Sqrt)
+            );
+            if needs_mul {
+                out.push(Token::Mul);
+            }
+        }
+        out.push(tok.clone());
+    }
+    out
+}
+
 // ── Percent preprocessing ─────────────────────────────────────────
 // Transforms Pct tokens into proper arithmetic before parsing.
 //
@@ -518,7 +549,8 @@ fn evaluate(expr: &str) -> Result<f64, CalcError> {
     if expr.is_empty() { return Err(CalcError::EmptyExpression); }
     let raw_tokens = tokenize(expr)?;
     if raw_tokens.is_empty() { return Err(CalcError::EmptyExpression); }
-    let tokens = preprocess_percent(raw_tokens)?;
+    let with_impl  = implicit_mul(raw_tokens);    // "2(6)" → "2*(6)"
+    let tokens     = preprocess_percent(with_impl)?;
     let mut p = Parser::new(tokens);
     let r = p.parse_expr()?;
     if p.pos != p.tokens.len() {
