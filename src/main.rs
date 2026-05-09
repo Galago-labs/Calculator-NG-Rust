@@ -736,7 +736,6 @@ impl AppState {
             hovered_btn: -1, pressed_btn: -1,
             close_hovered: false, close_pressed: false,
             min_hovered: false, min_pressed: false,
-            min_hovered: false, min_pressed: false,
             fonts: Fonts::null(),
             ws: WStrings::new(),
             btn_rects: precompute_btn_rects(), // safe: uses only compile-time constants
