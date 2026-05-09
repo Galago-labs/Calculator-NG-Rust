@@ -721,8 +721,6 @@ struct AppState {
     close_pressed:   bool,
     min_hovered:     bool,
     min_pressed:     bool,
-    min_hovered:     bool,
-    min_pressed:     bool,
     fonts:           Fonts,
     ws:              WStrings, // pre-built wstrings for static labels
     btn_rects:       Vec<RECT>, // pre-computed button geometry (fixed window size)
